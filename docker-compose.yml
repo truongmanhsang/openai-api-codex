@@ -1,0 +1,12 @@
+services:
+  openai-api:
+    build: .
+    ports:
+      - "${HOST_BIND:-127.0.0.1}:8000:8000"
+    environment:
+      AUTH_FILE: /run/secrets/codex-auth.json
+      UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:-https://chatgpt.com/backend-api/codex}
+      REQUEST_TIMEOUT: ${REQUEST_TIMEOUT:-60}
+    volumes:
+      - "${CODEX_AUTH_FILE:-/Users/truongmanhsang/.codex/auth.json}:/run/secrets/codex-auth.json:ro"
+    restart: unless-stopped

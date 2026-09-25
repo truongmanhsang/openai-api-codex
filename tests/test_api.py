@@ -45,6 +45,29 @@ def test_chat_completion_forwards_payload_and_auth(tmp_path: Path) -> None:
     assert response.json()["choices"][0]["message"]["content"] == "hello"
 
 
+def test_system_messages_are_mapped_to_developer_role(tmp_path: Path) -> None:
+    captured_payloads: list[dict] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured_payloads.append(json.loads(request.content))
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=b'data: {"type":"response.output_text.delta","delta":"{}"}\n\ndata: [DONE]\n\n')
+
+    with make_client(handler, tmp_path) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5.6-sol",
+                "messages": [
+                    {"role": "system", "content": "Extract facts as JSON."},
+                    {"role": "user", "content": "A neutral example."},
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert [message["role"] for message in captured_payloads[0]["input"]] == ["developer", "user"]
+
+
 def test_streaming_is_rejected(tmp_path: Path) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         raise AssertionError("upstream must not be called")

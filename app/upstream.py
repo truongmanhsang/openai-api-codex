@@ -81,7 +81,7 @@ class OpenAIUpstream:
 
     async def chat_completions(self, payload: dict[str, Any]) -> dict[str, Any]:
         messages = payload.get("messages", [])
-        input_messages = [{"type": "message", "role": item.get("role", "user"), "content": self._message_content(item.get("content", ""))} for item in messages if isinstance(item, dict)]
+        input_messages = [{"type": "message", "role": "developer" if item.get("role") == "system" else item.get("role", "user"), "content": self._message_content(item.get("content", ""))} for item in messages if isinstance(item, dict)]
         response_payload = {"model": payload.get("model") or self.settings.codex_model, "instructions": payload.get("instructions") or "You are a helpful assistant.", "input": input_messages, "store": False, "stream": True}
         events = await self._responses(response_payload)
         text = self._extract_text(events)

@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .config import ConfigurationError, Settings
-from .upstream import OpenAIUpstream, UpstreamHTTPError
+from .upstream import OpenAIUpstream, UpstreamHTTPError, UpstreamOutputError
 
 
 def error_response(message: str, error_type: str, status_code: int, code: str | None = None) -> JSONResponse:
@@ -54,6 +54,8 @@ def create_app(settings: Settings | None = None, upstream: OpenAIUpstream | None
         except UpstreamHTTPError as exc:
             body = exc.body if isinstance(exc.body, dict) and "error" in exc.body else {"error": {"message": "Upstream request failed", "type": "upstream_error"}}
             return JSONResponse(body, status_code=exc.status_code)
+        except UpstreamOutputError as exc:
+            return error_response(str(exc), "upstream_output_error", 502, "empty_response")
         except httpx.ReadTimeout:
             return error_response("Upstream request timed out", "upstream_timeout", 504)
         except httpx.ConnectError:

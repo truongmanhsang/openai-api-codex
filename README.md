@@ -14,6 +14,8 @@ docker compose up --build
 
 Use `CODEX_AUTH_FILE=/path/to/auth.json docker compose up --build` for another machine. The auth file must contain a non-empty `tokens.access_token` field. The proxy has no client authentication, so keep it on a trusted local/private network.
 
+When a chat request includes tools but omits `tool_choice`, the Compose setup defaults to `required` so tool-driven clients such as Hindsight Reflect receive a tool call. Set `DEFAULT_TOOL_CHOICE=auto` to keep the OpenAI-compatible optional-tool default.
+
 ## Endpoints
 
 ```sh

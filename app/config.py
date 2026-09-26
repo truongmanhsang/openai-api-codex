@@ -37,6 +37,7 @@ class Settings:
     upstream_base_url: str = field(default_factory=lambda: os.getenv("UPSTREAM_BASE_URL", "https://chatgpt.com/backend-api/codex"))
     request_timeout: float = field(default_factory=lambda: float(os.getenv("REQUEST_TIMEOUT", "120")))
     codex_model: str = field(default_factory=lambda: os.getenv("CODEX_MODEL", "gpt-5.6-sol"))
+    default_tool_choice: str = field(default_factory=lambda: os.getenv("DEFAULT_TOOL_CHOICE", "auto"))
     image_host_model: str = field(default_factory=lambda: os.getenv("CODEX_IMAGE_HOST_MODEL", "gpt-5.5"))
     image_model: str = field(default_factory=lambda: os.getenv("CODEX_IMAGE_MODEL", "gpt-image-2"))
     models: list[str] = field(default_factory=lambda: ["gpt-5.6-sol", "gpt-image-2"])

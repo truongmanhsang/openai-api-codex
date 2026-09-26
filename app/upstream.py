@@ -16,6 +16,10 @@ class UpstreamHTTPError(RuntimeError):
         self.body = body
 
 
+class UpstreamOutputError(RuntimeError):
+    """Raised when a successful Responses request contains no usable chat output."""
+
+
 class OpenAIUpstream:
     def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None):
         self.settings = settings
@@ -87,12 +91,22 @@ class OpenAIUpstream:
             response_payload["tools"] = self._responses_tools(payload["tools"])
         if "tool_choice" in payload:
             response_payload["tool_choice"] = self._responses_tool_choice(payload["tool_choice"])
+        elif response_payload.get("tools"):
+            # Tool-driven callers such as Hindsight Reflect need a tool result
+            # each turn; Codex may otherwise choose to answer in plain text.
+            response_payload["tool_choice"] = self.settings.default_tool_choice
         if "parallel_tool_calls" in payload:
             response_payload["parallel_tool_calls"] = payload["parallel_tool_calls"]
+        if isinstance(payload.get("reasoning_effort"), str):
+            response_payload["reasoning"] = {"effort": payload["reasoning_effort"]}
+        if "max_completion_tokens" in payload:
+            response_payload["max_output_tokens"] = payload["max_completion_tokens"]
         events = await self._responses(response_payload)
         completed = next((event.get("response") for event in reversed(events) if isinstance(event.get("response"), dict)), {})
         tool_calls = self._extract_function_calls(events)
-        text = self._extract_text(events, required=not bool(tool_calls))
+        text = self._extract_text(events, required=False)
+        if not tool_calls and text is None:
+            raise UpstreamOutputError(self._output_diagnostic(events))
         message: dict[str, Any] = {"role": "assistant", "content": text}
         if tool_calls:
             message["tool_calls"] = tool_calls
@@ -217,16 +231,90 @@ class OpenAIUpstream:
 
     @staticmethod
     def _extract_text(events: list[dict[str, Any]], required: bool = True) -> str | None:
-        deltas = [event["delta"] for event in events if event.get("type") == "response.output_text.delta" and isinstance(event.get("delta"), str)]
+        deltas = [event["delta"] for event in events if event.get("type") == "response.output_text.delta" and isinstance(event.get("delta"), str) and event["delta"]]
         if deltas:
             return "".join(deltas)
+        refusal_deltas = [event["delta"] for event in events if event.get("type") == "response.refusal.delta" and isinstance(event.get("delta"), str) and event["delta"]]
+        if refusal_deltas:
+            return "".join(refusal_deltas)
+        for event in events:
+            if event.get("type") == "response.output_text.done" and isinstance(event.get("text"), str) and event["text"].strip():
+                return event["text"]
+            if event.get("type") == "response.refusal.done" and isinstance(event.get("refusal"), str) and event["refusal"].strip():
+                return event["refusal"]
         for event in reversed(events):
             candidate = event.get("response") if isinstance(event.get("response"), dict) else event
             if isinstance(candidate.get("output_text"), str) and candidate["output_text"].strip():
                 return candidate["output_text"]
+            output = candidate.get("output")
+            if isinstance(output, list):
+                text_parts: list[str] = []
+                for item in output:
+                    if not isinstance(item, dict) or item.get("type") != "message":
+                        continue
+                    content = item.get("content")
+                    if not isinstance(content, list):
+                        continue
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+                            text_parts.append(part["text"])
+                        elif part.get("type") == "refusal" and isinstance(part.get("refusal"), str):
+                            text_parts.append(part["refusal"])
+                if text_parts:
+                    return "".join(text_parts)
         if required:
             raise RuntimeError("Codex Responses API returned no text output")
         return None
+
+    @staticmethod
+    def _output_diagnostic(events: list[dict[str, Any]]) -> str:
+        event_types: list[str] = []
+        output_types: list[str] = []
+        response_status: str | None = None
+        incomplete_reason: str | None = None
+        error_types: list[str] = []
+
+        for event in events:
+            event_type = event.get("type")
+            if isinstance(event_type, str) and event_type not in event_types:
+                event_types.append(event_type)
+            item = event.get("item")
+            if isinstance(item, dict) and isinstance(item.get("type"), str) and item["type"] not in output_types:
+                output_types.append(item["type"])
+            response = event.get("response") if isinstance(event.get("response"), dict) else event
+            status = response.get("status")
+            if isinstance(status, str):
+                response_status = status
+            details = response.get("incomplete_details")
+            if isinstance(details, dict) and isinstance(details.get("reason"), str):
+                incomplete_reason = details["reason"]
+            output = response.get("output")
+            if isinstance(output, list):
+                for output_item in output:
+                    if isinstance(output_item, dict) and isinstance(output_item.get("type"), str) and output_item["type"] not in output_types:
+                        output_types.append(output_item["type"])
+            error = response.get("error")
+            if isinstance(error, dict):
+                # Include only non-sensitive error classifications, never messages.
+                for key in ("type", "code"):
+                    value = error.get(key)
+                    if isinstance(value, str) and value not in error_types:
+                        error_types.append(value)
+
+        parts = ["Codex Responses API returned neither text nor a function call"]
+        if response_status:
+            parts.append(f"status={response_status}")
+        if incomplete_reason:
+            parts.append(f"incomplete_reason={incomplete_reason}")
+        if event_types:
+            parts.append(f"events={','.join(event_types[:12])}")
+        if output_types:
+            parts.append(f"output_types={','.join(output_types[:12])}")
+        if error_types:
+            parts.append(f"error_classification={','.join(error_types[:4])}")
+        return "; ".join(parts)
 
     @staticmethod
     def _extract_function_calls(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
